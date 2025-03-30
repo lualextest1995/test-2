@@ -1,9 +1,25 @@
 <script setup lang="ts">
 import { RouterLink, RouterView } from 'vue-router'
 import HelloWorld from './components/HelloWorld.vue'
+import request, { getData } from './apis'
+
+function getDataFromApi() {
+  getData({ test: 'test', id: '1' })
+    .then((response) => {
+      console.log('API response:', response)
+    })
+    .catch((error) => {
+      if (error.canceled || error.isHandled) return
+      console.log('API error:', error.message)
+    })
+}
 </script>
 
 <template>
+  <button @click="getDataFromApi">getData</button>
+  <button @click="request.cancelRequest('get:/people12')">cancal fetch</button>
+  <button @click="request.cancelAllRequests">cancal all</button>
+
   <header>
     <img alt="Vue logo" class="logo" src="@/assets/logo.svg" width="125" height="125" />
 
