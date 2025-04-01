@@ -27,6 +27,7 @@ interface CustomError {
   canceled?: boolean
   code?: number
   message?: string
+  raw?: any
 }
 
 // 自訂延遲函數
@@ -87,6 +88,12 @@ class Request {
    * @returns 修改後或原始的 Axios 請求配置對象。
    */
   private defaultRequestInterceptor = (config: InternalAxiosRequestConfig) => {
+    // 檢查網路連線狀態
+    if (!navigator.onLine) {
+      alert('網路連線異常，請檢查網路設定')
+      return Promise.reject(new Error('網路連線異常，請檢查網路設定'))
+    }
+
     const controller = new AbortController()
     const { signal } = controller
     config.signal = signal
@@ -126,31 +133,14 @@ class Request {
     const key = this.getRequestKey(response.config)
     this.abortControllerMap.delete(key)
 
-    // 下載 Blob 檔案的處理
-    // const contentType = response.headers['content-type']
-    // const disposition = response.headers['content-disposition']
-    // const isBlob = response.config.responseType === 'blob'
-
-    // if (isBlob && contentType?.includes('application')) {
-    //   const blob = response.data as Blob
-    //   const url = URL.createObjectURL(blob)
-
-    //   const filename =
-    //     disposition?.match(/filename\*=UTF-8''(.+)|filename="?(.+?)"?$/)?.[1] ||
-    //     disposition?.match(/filename="?(.+?)"?$/)?.[1] ||
-    //     'downloaded-file'
-
-    //   const a = document.createElement('a')
-    //   a.href = url
-    //   a.download = decodeURIComponent(filename)
-    //   a.style.display = 'none'
-    //   document.body.appendChild(a)
-    //   a.click()
-    //   a.remove()
-    //   URL.revokeObjectURL(url)
-
-    //   return { downloaded: true }
-    // }
+    // 判斷是否是文件下載，如果是直接返回 response
+    const type = Object.prototype.toString.call(response.data)
+    const isBlob = response.config.responseType === 'blob' || type === '[object Blob]'
+    const isArrayBuffer =
+      response.config.responseType === 'arraybuffer' || type === '[object ArrayBuffer]'
+    if (isBlob || isArrayBuffer) {
+      return response
+    }
 
     console.log('全局響應攔截', response)
     return response.data
@@ -161,10 +151,17 @@ class Request {
    * @param error - 要處理的 Axios 錯誤對象。
    * @returns 拒絕的 Promise，攔截錯誤。
    */
-  private defaultResponseInterceptorCatch = (error: unknown) => {
+  private defaultResponseInterceptorCatch = async (error: unknown) => {
     // 取消請求的錯誤處理
     if (axios.isCancel(error)) {
       return Promise.reject({ canceled: true, message: error.message })
+    }
+
+    // 處理 Blob 響應錯誤
+    const parsed = await this.parseBlobError(error)
+    if (parsed) {
+      alert(parsed.message)
+      return Promise.reject(parsed)
     }
 
     // 處理 500 / 401 / 403 / 404 等錯誤
@@ -196,6 +193,7 @@ class Request {
       [401, '未授權'],
       [403, '禁止訪問'],
       [404, '找不到資源'],
+      [429, '請求過於頻繁，請稍後再試'],
     ])
     const message = codeMap.get(error.response?.status ?? 0)
     if (message) {
@@ -203,6 +201,52 @@ class Request {
       return Promise.reject({ code: error.response?.status, message, isHandled: true })
     }
     return Promise.reject(error)
+  }
+
+  /**
+   * 解析 Blob 響應錯誤，並返回可讀的錯誤訊息。
+   * @param error - 要解析的錯誤對象。
+   * @returns 解析後的錯誤訊息或 undefined。
+   */
+  private async parseBlobError(error: unknown): Promise<CustomError | undefined> {
+    if (axios.isAxiosError(error) && error.response?.data instanceof Blob) {
+      const blob = error.response.data
+      const mime = blob.type
+      const text = await blob.text()
+
+      if (mime.includes('application/json')) {
+        try {
+          const json = JSON.parse(text)
+          return {
+            isHandled: true,
+            message: json.message || json.msg || '未知錯誤',
+            raw: json,
+          }
+        } catch {
+          return {
+            isHandled: true,
+            message: 'JSON 格式錯誤',
+            raw: text,
+          }
+        }
+      }
+
+      if (mime.includes('text/html') || mime.includes('text/plain')) {
+        return {
+          isHandled: true,
+          message: text.slice(0, 100), // 預防過長
+          raw: text,
+        }
+      }
+
+      return {
+        isHandled: true,
+        message: '未知的錯誤格式',
+        raw: text,
+      }
+    }
+
+    return undefined
   }
 
   /**
